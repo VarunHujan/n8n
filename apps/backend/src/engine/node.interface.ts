@@ -8,6 +8,7 @@ export interface NodeExecutionOutput {
   success: boolean;
   data?: any;
   error?: string;
+  branch?: string;
 }
 
 export interface INode {

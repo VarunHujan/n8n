@@ -30,9 +30,9 @@ export class IfNode implements INode {
 
       return {
         success: true,
+        branch: result ? 'true' : 'false',
         data: {
           matched: result,
-          // We can return the data on a true/false branch based on the result
           originalData: incoming,
         },
       };

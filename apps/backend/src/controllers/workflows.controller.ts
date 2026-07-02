@@ -1,6 +1,6 @@
 import { Controller, Post, Body, HttpCode, HttpStatus, Logger } from '@nestjs/common';
 import { DagWalkerService } from '../engine/dag-walker.service';
-import { WorkflowDefinition } from '../../../../packages/shared-types';
+import { WorkflowDefinition } from '../shared-types';
 
 @Controller('workflows')
 export class WorkflowsController {
@@ -31,6 +31,7 @@ export class WorkflowsController {
       };
     } catch (error: any) {
       this.logger.error(`Execution failed: ${error.message}`);
+      
       return {
         success: false,
         error: error.message

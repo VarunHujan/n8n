@@ -1,8 +1,9 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Zap, Globe, Database, Shuffle, Plus } from 'lucide-react';
+import { Zap, Globe, Database, Shuffle, Plus, Lock } from 'lucide-react';
 
 export const CustomNode = ({ id, data }: any) => {
+  const isLocked = !!data.isLocked;
 
   const getIcon = () => {
     switch (data.type) {
@@ -29,36 +30,96 @@ export const CustomNode = ({ id, data }: any) => {
     }));
   };
 
+  const colorVar = `var(--color-${data.type}, var(--color-primary))`;
+  const bgVar = `rgba(var(--color-${data.type}-rgb, 99, 102, 241), 0.15)`;
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault(); // Prevent default browser right-click menu
+    e.stopPropagation();
+    window.dispatchEvent(new CustomEvent('openNodeContextMenu', {
+      detail: {
+        nodeId: id,
+        isLocked: isLocked,
+        x: e.clientX,
+        y: e.clientY
+      }
+    }));
+  };
+
   return (
-    <div className="custom-node" data-type={data.type}>
+    <div 
+      className={`custom-node ${isLocked ? 'nodrag' : ''}`} 
+      data-type={data.type}
+      onContextMenu={handleContextMenu}
+      style={{
+        '--node-color': colorVar,
+        '--node-color-bg': bgVar,
+        transition: 'all 0.3s ease',
+        ...(isLocked ? {
+          borderColor: 'var(--color-action)',
+          boxShadow: '0 0 0 2px var(--color-action), 0 4px 20px rgba(0,0,0,0.1)'
+        } : {})
+      }}
+    >
       {/* Target handle (input) */}
       {data.type !== 'webhook' && (
-        <Handle type="target" position={Position.Left} />
+        <Handle 
+          type="target" 
+          position={Position.Left} 
+          className={isLocked ? "giant-target-handle" : ""} 
+        />
       )}
       
       <div className="node-content-wrapper">
         <div className="node-header">
-          <div className="node-icon-wrapper">
+          <div className="node-icon" style={{ color: colorVar, background: bgVar }}>
             {getIcon()}
           </div>
           <div className="node-title-area">
             <div className="node-title">{data.label}</div>
-            <div className="node-subtitle">{data.description}</div>
+            {data.description && <div className="node-description">{data.description}</div>}
+          </div>
+          <div className="node-lock-indicator">
+            {isLocked && <Lock size={12} color="var(--text-secondary)" />}
           </div>
         </div>
         
         {data.configSummary && (
-          <div style={{ marginTop: '16px' }}>
-            <div className="node-pill">{data.configSummary}</div>
+          <div className="node-config-summary">
+            {data.configSummary}
           </div>
         )}
       </div>
 
-      {/* Source handle (output) */}
-      <Handle type="source" position={Position.Right} id="a" />
+      {/* Lock Indicator Icon */}
+      {isLocked && (
+        <div style={{ position: 'absolute', top: -12, right: -12, background: 'var(--color-action)', borderRadius: '50%', padding: '4px', color: 'white' }}>
+          <Lock size={12} />
+        </div>
+      )}
+
+      {/* Source handles (output) */}
+      <Handle 
+        type="source" 
+        position={Position.Right} 
+        id={data.type === 'if_condition' ? 'true' : 'default'} 
+        className={isLocked ? `giant-source-handle ${data.type === 'webhook' ? 'giant-source-handle-full' : ''}` : ""}
+        style={data.type === 'if_condition' ? { top: '35%' } : undefined}
+      />
+      {data.type === 'if_condition' && (
+        <div style={{ position: 'absolute', right: '-4px', top: '35%', transform: 'translateY(-50%)', fontSize: '9px', background: 'var(--bg-card)', padding: '2px 4px', borderRadius: '4px', zIndex: 10 }}>True</div>
+      )}
       
       {data.type === 'if_condition' && (
-        <Handle type="source" position={Position.Right} id="b" style={{ top: '75%' }} />
+        <>
+          <Handle 
+            type="source" 
+            position={Position.Right} 
+            id="false" 
+            style={{ top: '65%' }} 
+          />
+          <div style={{ position: 'absolute', right: '-4px', top: '65%', transform: 'translateY(-50%)', fontSize: '9px', background: 'var(--bg-card)', padding: '2px 4px', borderRadius: '4px', zIndex: 10 }}>False</div>
+        </>
       )}
 
       {/* The new prominent + button on the right edge */}

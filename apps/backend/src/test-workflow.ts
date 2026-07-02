@@ -1,5 +1,5 @@
 import { DagWalkerService } from './engine/dag-walker.service';
-import { WorkflowDefinition } from '../../../packages/shared-types';
+import { WorkflowDefinition } from './shared-types';
 
 async function bootstrap() {
   const engine = new DagWalkerService();
