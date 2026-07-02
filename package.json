@@ -1,0 +1,9 @@
+{
+  "name": "n8n-clone",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "build": "pnpm -r run build"
+  }
+}
