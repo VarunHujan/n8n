@@ -1,4 +1,8 @@
-import { INode, NodeExecutionInput, NodeExecutionOutput } from '../node.interface';
+import {
+  INode,
+  NodeExecutionInput,
+  NodeExecutionOutput,
+} from '../node.interface';
 
 export class HttpNode implements INode {
   type = 'http_request';
@@ -6,7 +10,7 @@ export class HttpNode implements INode {
   async execute(input: NodeExecutionInput): Promise<NodeExecutionOutput> {
     try {
       const { url, method = 'GET', body, headers } = input.parameters;
-      
+
       if (!url) {
         throw new Error('URL is required for HTTP Request node');
       }

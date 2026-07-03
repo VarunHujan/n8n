@@ -1,4 +1,8 @@
-import { INode, NodeExecutionInput, NodeExecutionOutput } from '../node.interface';
+import {
+  INode,
+  NodeExecutionInput,
+  NodeExecutionOutput,
+} from '../node.interface';
 
 export class IfNode implements INode {
   type = 'if_condition';

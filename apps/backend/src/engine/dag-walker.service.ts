@@ -33,11 +33,11 @@ export class DagWalkerService {
   async executeWorkflow(workflow: WorkflowDefinition, initialPayload: any) {
     this.logger.log(`Starting execution for workflow: ${workflow.name}`);
     const executionData = new Map<string, any>();
-    const nodesMap = new Map(workflow.nodes.map(n => [n.id, n]));
-    
+    const nodesMap = new Map(workflow.nodes.map((n) => [n.id, n]));
+
     // Find trigger nodes (in-degree 0)
-    const targets = new Set(workflow.edges.map(e => e.target));
-    const startNodes = workflow.nodes.filter(n => !targets.has(n.id));
+    const targets = new Set(workflow.edges.map((e) => e.target));
+    const startNodes = workflow.nodes.filter((n) => !targets.has(n.id));
 
     const queue = [...startNodes];
     const executed = new Set<string>();
@@ -45,20 +45,27 @@ export class DagWalkerService {
     while (queue.length > 0) {
       const nodeDef = queue.shift()!;
       if (executed.has(nodeDef.id)) continue;
-      
+
       this.logger.log(`Executing node: ${nodeDef.id} (${nodeDef.type})`);
       const nodeInstance = this.nodeRegistry.get(nodeDef.type);
       if (!nodeInstance) throw new Error(`Unknown node type: ${nodeDef.type}`);
 
-      const incomingEdges = workflow.edges.filter(e => e.target === nodeDef.id);
-      const incomingData = incomingEdges.map(edge => executionData.get(edge.source));
+      const incomingEdges = workflow.edges.filter(
+        (e) => e.target === nodeDef.id,
+      );
+      const incomingData = incomingEdges.map((edge) =>
+        executionData.get(edge.source),
+      );
 
       if (nodeDef.type === 'webhook' || nodeDef.type === 'manual_trigger') {
         nodeDef.parameters.payload = initialPayload;
       }
 
       // Resolve expressions in parameters
-      const resolvedParams = this.resolveParameters(nodeDef.parameters, executionData);
+      const resolvedParams = this.resolveParameters(
+        nodeDef.parameters,
+        executionData,
+      );
 
       const result = await nodeInstance.execute({
         nodeId: nodeDef.id,
@@ -71,12 +78,14 @@ export class DagWalkerService {
         throw new Error(`Workflow execution halted at node ${nodeDef.id}`);
       }
 
-      this.logger.log(`Node ${nodeDef.id} output: ${JSON.stringify(result.data)}`);
+      this.logger.log(
+        `Node ${nodeDef.id} output: ${JSON.stringify(result.data)}`,
+      );
       executionData.set(nodeDef.id, result.data);
       executed.add(nodeDef.id);
 
       // Find outgoing edges that match the returned branch
-      const outgoingEdges = workflow.edges.filter(e => {
+      const outgoingEdges = workflow.edges.filter((e) => {
         if (e.source !== nodeDef.id) return false;
         if (result.branch) {
           return e.sourceHandle === result.branch;
@@ -97,10 +106,13 @@ export class DagWalkerService {
     return executionData;
   }
 
-  private resolveParameters(params: Record<string, any>, executionData: Map<string, any>): Record<string, any> {
+  private resolveParameters(
+    params: Record<string, any>,
+    executionData: Map<string, any>,
+  ): Record<string, any> {
     const resolved: Record<string, any> = {};
     const context: any = { $node: {} };
-    
+
     executionData.forEach((value, key) => {
       // Allows expressions like {{ $node["node_id"].data.field }}
       context.$node[key] = { data: value };
@@ -115,8 +127,10 @@ export class DagWalkerService {
             const func = new Function('$node', `return ${exactMatch[1]}`);
             return func(context.$node);
           } catch (e) {
-             this.logger.warn(`Failed to evaluate exact expression: ${exactMatch[1]}`);
-             return val;
+            this.logger.warn(
+              `Failed to evaluate exact expression: ${exactMatch[1]}`,
+            );
+            return val;
           }
         }
         // Partial match -> String replacement
@@ -144,7 +158,7 @@ export class DagWalkerService {
     for (const [key, value] of Object.entries(params)) {
       resolved[key] = evaluate(value);
     }
-    
+
     return resolved;
   }
 }
