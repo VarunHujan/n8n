@@ -7,7 +7,7 @@ import { WebhookNode } from './nodes/webhook.node';
 import { IfNode } from './nodes/if.node';
 import { ManualTriggerNode } from './nodes/manual.node';
 import { CsvNode } from './nodes/csv.node';
-import { GmailSendNode } from './nodes/gmail.node';
+import { GmailNode } from './nodes/gmail.node';
 import { GeminiNode } from './nodes/gemini.node';
 
 @Injectable()
@@ -22,7 +22,7 @@ export class DagWalkerService {
     this.registerNode(new IfNode());
     this.registerNode(new ManualTriggerNode());
     this.registerNode(new CsvNode());
-    this.registerNode(new GmailSendNode());
+    this.registerNode(new GmailNode());
     this.registerNode(new GeminiNode());
   }
 
@@ -30,7 +30,7 @@ export class DagWalkerService {
     this.nodeRegistry.set(node.type, node);
   }
 
-  async executeWorkflow(workflow: WorkflowDefinition, initialPayload: any) {
+  async executeWorkflow(workflow: WorkflowDefinition, initialPayload: any, sysContext?: Record<string, any>, emit?: (event: any) => void) {
     this.logger.log(`Starting execution for workflow: ${workflow.name}`);
     const executionData = new Map<string, any>();
     const nodesMap = new Map(workflow.nodes.map(n => [n.id, n]));
@@ -47,6 +47,8 @@ export class DagWalkerService {
       if (executed.has(nodeDef.id)) continue;
       
       this.logger.log(`Executing node: ${nodeDef.id} (${nodeDef.type})`);
+      if (emit) emit({ type: 'node-start', nodeId: nodeDef.id });
+
       const nodeInstance = this.nodeRegistry.get(nodeDef.type);
       if (!nodeInstance) throw new Error(`Unknown node type: ${nodeDef.type}`);
 
@@ -64,16 +66,19 @@ export class DagWalkerService {
         nodeId: nodeDef.id,
         parameters: resolvedParams,
         incomingData,
+        sysContext,
       });
 
       if (!result.success) {
         this.logger.error(`Node ${nodeDef.id} failed: ${result.error}`);
-        throw new Error(`Workflow execution halted at node ${nodeDef.id}`);
+        if (emit) emit({ type: 'node-error', nodeId: nodeDef.id, error: result.error });
+        throw new Error(`Workflow execution halted at node ${nodeDef.id}: ${result.error}`);
       }
 
       this.logger.log(`Node ${nodeDef.id} output: ${JSON.stringify(result.data)}`);
       executionData.set(nodeDef.id, result.data);
       executed.add(nodeDef.id);
+      if (emit) emit({ type: 'node-end', nodeId: nodeDef.id });
 
       // Find outgoing edges that match the returned branch
       const outgoingEdges = workflow.edges.filter(e => {

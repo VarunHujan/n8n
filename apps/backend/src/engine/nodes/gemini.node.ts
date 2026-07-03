@@ -50,24 +50,43 @@ export class GeminiNode implements INode {
         const text = result.response.text();
         
         // Parse the generated text as JSON
-        let generatedData;
+        let generatedData: any = {};
         try {
+            // First attempt to parse directly
             generatedData = JSON.parse(text);
         } catch(e) {
             // fallback if it didn't return perfect JSON
-            const match = text.match(/```json\n([\s\S]*?)\n```/);
+            const match = text.match(/```(?:json)?\n([\s\S]*?)\n```/);
             if (match) {
-                generatedData = JSON.parse(match[1]);
+                try {
+                    generatedData = JSON.parse(match[1]);
+                } catch(e2) {
+                    generatedData = JSON.parse(text.replace(/^[^{]*/, '').replace(/[^}]*$/, ''));
+                }
             } else {
-                generatedData = JSON.parse(text.replace(/^[^{]*/, '').replace(/[^}]*$/, ''));
+                try {
+                    generatedData = JSON.parse(text.replace(/^[^{]*/, '').replace(/[^}]*$/, ''));
+                } catch(e3) {
+                    // Manual extraction as a last resort if JSON completely failed
+                    const subjectMatch = text.match(/"subject"\s*:\s*"([^"]+)"/i);
+                    const bodyMatch = text.match(/"body"\s*:\s*"([^"]+)"/i);
+                    if (subjectMatch) generatedData.subject = subjectMatch[1];
+                    if (bodyMatch) generatedData.body = bodyMatch[1];
+                }
             }
         }
+        
+        // Case-insensitive key lookup
+        const getVal = (obj: any, key: string) => {
+           const foundKey = Object.keys(obj).find(k => k.toLowerCase() === key.toLowerCase());
+           return foundKey ? obj[foundKey] : '';
+        };
 
         // Combine the generated data with the original item data so downstream nodes have both
         results.push({
           ...item,
-          generatedSubject: generatedData.subject || '',
-          generatedBody: generatedData.body || ''
+          generatedSubject: getVal(generatedData, 'subject'),
+          generatedBody: getVal(generatedData, 'body')
         });
 
       } catch (err: any) {

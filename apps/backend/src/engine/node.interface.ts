@@ -2,6 +2,7 @@ export interface NodeExecutionInput {
   nodeId: string;
   parameters: Record<string, any>;
   incomingData: any[]; // Data from previous nodes
+  sysContext?: Record<string, any>; // System context injected by the engine
 }
 
 export interface NodeExecutionOutput {

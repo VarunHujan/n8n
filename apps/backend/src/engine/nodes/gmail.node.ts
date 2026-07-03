@@ -2,12 +2,12 @@ import { INode, NodeExecutionInput, NodeExecutionOutput } from '../node.interfac
 import { google } from 'googleapis';
 import { Logger } from '@nestjs/common';
 
-export class GmailSendNode implements INode {
-  type = 'gmail_send';
-  private readonly logger = new Logger(GmailSendNode.name);
+export class GmailNode implements INode {
+  type = 'gmail';
+  private readonly logger = new Logger(GmailNode.name);
 
   async execute(config: NodeExecutionInput): Promise<NodeExecutionOutput> {
-    const accessToken = config.parameters.accessToken;
+    const accessToken = config.sysContext?.googleAccessToken || config.parameters.accessToken;
     
     if (!accessToken) {
       return { success: false, error: 'Gmail node requires a valid Google access token.' };
@@ -35,11 +35,28 @@ export class GmailSendNode implements INode {
     for (const item of itemsToProcess) {
       try {
         const to = interpolate(config.parameters.to || '', item);
-        const subject = interpolate(config.parameters.subject || '', item);
-        const body = interpolate(config.parameters.body || '', item);
+        const subject = config.parameters.subject ? interpolate(config.parameters.subject, item) : (item.generatedSubject || '');
+        const body = config.parameters.body ? interpolate(config.parameters.body, item) : (item.generatedBody || '');
 
         if (!to) {
           throw new Error('Recipient "to" field is empty after interpolation.');
+        }
+
+        // Rigorous verification to avoid blindly sending
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        const emailList = to.split(',').map(e => e.trim()).filter(e => e);
+        
+        if (emailList.length === 0) {
+          throw new Error('No valid recipients found in the "To" field.');
+        }
+
+        const invalidEmails = emailList.filter(email => !emailRegex.test(email));
+        if (invalidEmails.length > 0) {
+          throw new Error(`Email Verification Failed: Invalid email format detected for "${invalidEmails.join(', ')}". Sending aborted to prevent bounces.`);
+        }
+
+        if (!subject && !body) {
+          throw new Error('Both Subject and Body are empty. If you are using Gemini, ensure it is connected sequentially (CSV -> Gemini -> Gmail), not in parallel.');
         }
 
         const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
@@ -82,7 +99,7 @@ export class GmailSendNode implements INode {
     }
 
     if (errors.length > 0 && results.length === 0) {
-      return { success: false, error: 'All emails failed to send: ' + JSON.stringify(errors) };
+      return { success: false, error: 'Operation failed: ' + JSON.stringify(errors) };
     }
 
     return {

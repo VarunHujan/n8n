@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -15,9 +15,7 @@ import {
 } from '@xyflow/react';
 import type { Connection, Edge, Node } from '@xyflow/react';
 import { CustomNode } from './CustomNode';
-import { useGoogleLogin } from '@react-oauth/google';
-import { jwtDecode } from 'jwt-decode';
-import { Play, Save, Zap, Globe, Database, Shuffle, Sun, Moon, Lock, Unlock, Trash, Unlink, Plus, PanelLeftClose, PanelLeft, FileSpreadsheet, Mail } from 'lucide-react';
+import { Play, Save, Zap, Sun, Moon, Lock, Unlock, Trash, Unlink, Plus, FileSpreadsheet, Mail, LogOut } from 'lucide-react';
 import './index.css';
 
 const nodeTypes = {
@@ -39,16 +37,131 @@ const initialNodes: Node[] = [
   }
 ];
 
+const EmailAutocomplete = ({ value, onChange, isMultiple }: { value: string, onChange: (v: string) => void, isMultiple: boolean }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [contacts, setContacts] = useState<{name: string, email: string, avatar: string}[]>([]);
+
+  useEffect(() => {
+    const fetchContacts = async () => {
+      const token = localStorage.getItem('auth_token');
+      if (!token) return;
+      try {
+        const res = await fetch('https://people.googleapis.com/v1/people/me/connections?personFields=names,emailAddresses&pageSize=100', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await res.json();
+        if (data.connections) {
+          const fetchedContacts = data.connections
+            .filter((person: any) => person.emailAddresses && person.emailAddresses.length > 0)
+            .map((person: any) => ({
+              name: person.names ? person.names[0].displayName : 'Unknown',
+              email: person.emailAddresses[0].value,
+              avatar: person.names ? person.names[0].displayName.charAt(0).toUpperCase() : 'U'
+            }));
+          setContacts(fetchedContacts);
+        }
+      } catch (e) {
+        console.error('Failed to fetch Google Contacts', e);
+      }
+    };
+    fetchContacts();
+  }, []);
+
+  useEffect(() => {
+    if (!isMultiple) {
+      setSearchTerm(value);
+      setIsOpen(value.length > 0 && !contacts.find(c => c.email === value));
+      return;
+    }
+    const parts = value.split(',');
+    const lastPart = parts[parts.length - 1].trim();
+    setSearchTerm(lastPart);
+    setIsOpen(lastPart.length > 0);
+  }, [value, isMultiple, contacts]);
+
+  const filtered = contacts.filter(c => 
+    c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+    c.email.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(searchTerm);
+  if (isEmail && !filtered.find(c => c.email === searchTerm)) {
+    filtered.unshift({
+      name: `Send to ${searchTerm}`,
+      email: searchTerm,
+      avatar: '🌍'
+    });
+  }
+
+  const handleSelect = (email: string) => {
+    if (!isMultiple) {
+      onChange(email);
+      setIsOpen(false);
+      return;
+    }
+    const parts = value.split(',');
+    parts.pop(); 
+    parts.push(' ' + email); 
+    onChange(parts.join(',').trim() + ', ');
+    setIsOpen(false);
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      {isMultiple ? (
+        <textarea 
+          placeholder="john@example.com, jane@example.com, {{email}}"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => setIsOpen(true)}
+          onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+          rows={3}
+        />
+      ) : (
+        <input 
+          type="text" 
+          placeholder="{{email}}"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => setIsOpen(true)}
+          onBlur={() => setTimeout(() => setIsOpen(false), 200)}
+        />
+      )}
+      
+      {isOpen && filtered.length > 0 && (
+        <div className="autocomplete-dropdown">
+          {filtered.map((c, i) => (
+            <div key={i} className="autocomplete-item" onClick={() => handleSelect(c.email)}>
+              <div className="ac-avatar">{c.avatar}</div>
+              <div className="ac-details">
+                <span className="ac-name">{c.name}</span>
+                <span className="ac-email">{c.email}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const App = () => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(import.meta.env.VITE_REQUIRE_LOGIN !== 'true');
-  const [userProfile, setUserProfile] = useState<{name: string, email: string} | null>(
-    import.meta.env.VITE_REQUIRE_LOGIN !== 'true' ? { name: 'Guest User', email: 'guest@local' } : null
-  );
-  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [runningNode, setRunningNode] = useState<string | null>(null);
+  const [executionLogs, setExecutionLogs] = useState<{timestamp: string, message: string, type: 'info' | 'error' | 'success'}[]>([]);
+  const [isLogsOpen, setIsLogsOpen] = useState(false);
+  const [userProfile] = useState<{name: string, email: string} | null>(() => {
+    const saved = localStorage.getItem('user_profile');
+    if (saved) return JSON.parse(saved);
+    return import.meta.env.VITE_REQUIRE_LOGIN !== 'true' ? { name: 'Guest User', email: 'guest@local' } : null;
+  });
+  const [accessToken] = useState<string | null>(() => {
+    return localStorage.getItem('auth_token') || null;
+  });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   
   const updateNodeParameters = (nodeId: string, newParams: any) => {
@@ -74,7 +187,7 @@ const App = () => {
 
   // Auto-hide MiniMap state
   const [isCanvasMoving, setIsCanvasMoving] = useState(false);
-  const moveTimeout = useRef<NodeJS.Timeout | null>(null);
+  const moveTimeout = useRef<any>(null);
 
   const handleMove = () => {
     setIsCanvasMoving(true);
@@ -414,12 +527,21 @@ const App = () => {
 
   const executeWorkflow = async () => {
     setIsExecuting(true);
+    setExecutionLogs([]);
+    setIsLogsOpen(true);
+    
+    const addLog = (msg: string, type: 'info' | 'error' | 'success' = 'info') => {
+      setExecutionLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: msg, type }]);
+    };
+    
+    addLog('Starting workflow execution...', 'info');
+    
     const workflow = {
       id: 'demo_workflow',
       name: 'Demo Visual Workflow',
       nodes: nodes.map(n => {
         const params: any = { ...(n.data.parameters || {}) };
-        if (n.data.type === 'gmail_send') {
+        if (n.data.type === 'gmail') {
           params.accessToken = accessToken;
         }
         return {
@@ -438,22 +560,71 @@ const App = () => {
     };
 
     try {
-      const res = await fetch('http://localhost:3000/workflows/execute', {
+      const res = await fetch('http://localhost:3000/workflows/execute-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflow, initialPayload: { message: 'Triggered from React UI', accessToken } })
+        body: JSON.stringify({ 
+          workflow, 
+          initialPayload: {},
+          sysContext: { googleAccessToken: localStorage.getItem('auth_token') }
+        })
       });
-      const data = await res.json();
       
-      if(data.success) {
-        alert('Execution Success! Check your NestJS backend console for the output logs.\n\nReturned Data:\n' + JSON.stringify(data.executionData, null, 2));
-      } else {
-        alert('Execution Failed: ' + data.error);
+      if (!res.body) throw new Error('No readable stream available');
+      
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split('\n\n');
+        
+        buffer = parts.pop() || '';
+        
+        for (const part of parts) {
+          const trimmed = part.trim();
+          if (trimmed.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(trimmed.substring(6));
+              
+              if (event.type === 'node-start') {
+                setRunningNode(event.nodeId);
+                const nodeName = nodes.find(n => n.id === event.nodeId)?.data.label || event.nodeId;
+                addLog(`Executing node: ${nodeName}`, 'info');
+              } else if (event.type === 'node-end') {
+                // Keep the glow until the next node or complete
+                setRunningNode(event.nodeId);
+                const nodeName = nodes.find(n => n.id === event.nodeId)?.data.label || event.nodeId;
+                addLog(`Node ${nodeName} completed successfully.`, 'success');
+              } else if (event.type === 'node-error') {
+                setRunningNode(event.nodeId);
+                const nodeName = nodes.find(n => n.id === event.nodeId)?.data.label || event.nodeId;
+                addLog(`Node ${nodeName} failed: ${event.error}`, 'error');
+              } else if (event.type === 'workflow-complete') {
+                setRunningNode(null);
+                addLog('Workflow executed successfully!', 'success');
+                console.log('Execution result:', event.data);
+              } else if (event.type === 'workflow-error') {
+                setRunningNode(null);
+                addLog(`Workflow failed: ${event.error}`, 'error');
+                throw new Error(event.error || 'Execution failed');
+              }
+            } catch (e) {
+              console.error('Failed to parse chunk:', trimmed);
+            }
+          }
+        }
       }
     } catch (err: any) {
-      alert('Failed to connect to backend on localhost:3000. Make sure the NestJS server is running.');
+      addLog(`Execution Error: ${err.message || 'Failed to connect'}`, 'error');
+      setRunningNode(null);
     } finally {
       setIsExecuting(false);
+      setRunningNode(null);
     }
   };
 
@@ -466,58 +637,7 @@ const App = () => {
     return true;
   }, []);
 
-  const handleLogin = useGoogleLogin({
-    flow: 'auth-code',
-    scope: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly',
-    onSuccess: async (codeResponse) => {
-      console.log('Got Auth Code:', codeResponse.code);
-      
-      // Send the code to our NestJS backend to exchange for tokens
-      try {
-        const res = await fetch('http://localhost:3000/auth/google', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: codeResponse.code })
-        });
-        const data = await res.json();
-        
-        if (data.success) {
-          setUserProfile({ name: data.user.name, email: data.user.email });
-          setAccessToken(data.access_token);
-          setIsAuthenticated(true);
-        } else {
-          console.error("Backend auth failed:", data.error);
-        }
-      } catch (error) {
-        console.error("Failed to authenticate with backend", error);
-      }
-    },
-    onError: (error) => console.log('Login Failed:', error)
-  });
 
-  if (!isAuthenticated) {
-    return (
-      <div className="login-screen">
-        <div className="login-card">
-          <div className="login-icon-wrapper">
-            <Zap size={32} />
-          </div>
-          <h1 className="login-title">Welcome Back</h1>
-          <p className="login-subtitle">Sign in to sync your workflows and authenticate your automation nodes.</p>
-          
-          <button className="google-auth-btn" onClick={handleLogin}>
-            <svg width="20" height="20" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M47.532 24.5528C47.532 22.9214 47.3997 21.2811 47.1175 19.6761H24.48V28.9181H37.4434C36.9055 31.8988 35.177 34.5356 32.6461 36.2111V42.2078H40.3801C44.9217 38.0278 47.532 31.8547 47.532 24.5528Z" fill="#4285F4"/>
-              <path d="M24.48 48.0016C30.9529 48.0016 36.4116 45.8764 40.3888 42.2078L32.6549 36.2111C30.5031 37.675 27.7253 38.5056 24.48 38.5056C18.2276 38.5056 12.9305 34.2798 11.0139 28.6006H3.03296V34.7825C7.10718 42.8868 15.4056 48.0016 24.48 48.0016Z" fill="#34A853"/>
-              <path d="M11.0051 28.6006C9.99973 25.6199 9.99973 22.3923 11.0051 19.4117V13.2297H3.03296C-0.371021 20.0012 -0.371021 28.0111 3.03296 34.7825L11.0051 28.6006Z" fill="#FBBC04"/>
-              <path d="M24.48 9.49606C27.9016 9.42125 31.2086 10.7027 33.6841 13.0573L40.5387 6.20263C36.1956 2.14818 30.4184 -0.0619894 24.48 0.00125439C15.4056 0.00125439 7.10718 5.11603 3.03296 13.2297L11.0051 19.4117C12.9129 13.7237 18.2188 9.49606 24.48 9.49606Z" fill="#EA4335"/>
-            </svg>
-            Continue with Google
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="app-layout" data-theme={theme}>
@@ -530,6 +650,17 @@ const App = () => {
             <span className="user-name">{userProfile.name}</span>
             <span className="user-status">Authenticated</span>
           </div>
+          <button 
+            className="sign-out-btn" 
+            onClick={() => {
+              localStorage.removeItem('auth_token');
+              localStorage.removeItem('user_profile');
+              window.location.href = '/login';
+            }}
+            title="Sign Out"
+          >
+            <LogOut size={16} />
+          </button>
         </div>
       )}
 
@@ -579,13 +710,22 @@ const App = () => {
               </div>
             </div>
 
-            <div className="dndnode gmail_send" onDragStart={(e) => onDragStart(e, 'gmail_send', 'Send Gmail', 'Sends an email using your authenticated account')} draggable>
-              <div className="sidebar-icon" style={{ color: 'var(--color-gmail_send)' }}><Mail size={20} /></div>
+            <div className="dndnode gmail" onDragStart={(e) => onDragStart(e, 'gmail', 'Send Gmail', 'Sends emails using your authenticated account')} draggable>
+              <div className="sidebar-icon" style={{ color: 'var(--color-gmail)' }}><Mail size={20} /></div>
               <div>
                 <strong>Send Gmail</strong>
                 <span>Sends an email</span>
               </div>
             </div>
+
+            <div className="dndnode gemini" onDragStart={(e) => onDragStart(e, 'gemini', 'Gemini AI', 'Generate content using Google Gemini')} draggable>
+              <div className="sidebar-icon" style={{ color: 'var(--color-gemini)' }}><Zap size={20} /></div>
+              <div>
+                <strong>Gemini AI</strong>
+                <span>Generates content</span>
+              </div>
+            </div>
+
 
           </div>
         </div>
@@ -628,8 +768,11 @@ const App = () => {
                 <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('csv_input', 'CSV Data', 'Tabular data source')}>
                   <FileSpreadsheet size={16} color="var(--color-csv_input)" /> CSV Data
                 </button>
-                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('gmail_send', 'Send Gmail', 'Sends an email')}>
-                  <Mail size={16} color="var(--color-gmail_send)" /> Send Gmail
+                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('gmail', 'Send Gmail', 'Sends an email')}>
+                  <Mail size={16} color="var(--color-gmail)" /> Send Gmail
+                </button>
+                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('gemini', 'Gemini AI', 'Generates content')}>
+                  <Zap size={16} color="var(--color-gemini)" /> Gemini AI
                 </button>
               </div>
             </div>
@@ -831,7 +974,10 @@ const App = () => {
         )}
 
         <ReactFlow
-          nodes={nodes}
+          nodes={nodes.map(n => ({ 
+            ...n, 
+            className: `${n.className || ''} ${n.id === runningNode ? 'running-node-glow' : ''}`.trim()
+          }))}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
@@ -891,7 +1037,7 @@ const App = () => {
               const selectedNode = nodes.find(n => n.id === selectedNodeId);
               if (!selectedNode) return null;
               
-              const p = selectedNode.data.parameters || {};
+              const p: any = selectedNode.data.parameters || {};
 
               return (
                 <>
@@ -911,32 +1057,91 @@ const App = () => {
                         />
                       </div>
                     )}
-                    {selectedNode.data.type === 'gmail_send' && (
+                    {selectedNode.data.type === 'gmail' && (() => {
+                      const isLinkedToGemini = edges.some(e => e.target === selectedNode.id && nodes.find(n => n.id === e.source)?.data.type === 'gemini');
+                      return (
+                        <>
+                          <div className="form-group">
+                            <label>Send Mode</label>
+                            <select 
+                              value={p.sendMode || 'single'}
+                              onChange={(e) => updateNodeParameters(selectedNode.id, { sendMode: e.target.value })}
+                            >
+                              <option value="single">Single Account</option>
+                              <option value="multiple">Multiple Accounts (Comma Separated)</option>
+                            </select>
+                          </div>
+                          
+                          <div className="form-group">
+                            <label>{p.sendMode === 'multiple' ? 'To Emails (Comma Separated)' : 'To Email'}</label>
+                            <EmailAutocomplete 
+                              value={p.to || ''} 
+                              onChange={(val) => updateNodeParameters(selectedNode.id, { to: val })} 
+                              isMultiple={p.sendMode === 'multiple'} 
+                            />
+                            <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                              All emails will be rigorously verified before sending to avoid bounces.
+                            </p>
+                          </div>
+                          
+                          {isLinkedToGemini ? (
+                            <div className="alert-box" style={{ background: 'var(--bg-card)', padding: '10px', borderRadius: '4px', borderLeft: '4px solid var(--color-gemini)', marginTop: '10px' }}>
+                              <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>
+                                <Zap size={14} style={{ display: 'inline', marginRight: '5px', color: 'var(--color-gemini)' }}/>
+                                Subject and Body are automatically generated by the connected Gemini AI node.
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="form-group">
+                                <label>Subject</label>
+                                <input 
+                                  type="text" 
+                                  placeholder="Hello {{name}}"
+                                  value={p.subject || ''}
+                                  onChange={(e) => updateNodeParameters(selectedNode.id, { subject: e.target.value })}
+                                />
+                              </div>
+                              <div className="form-group">
+                                <label>Body (Text/HTML)</label>
+                                <textarea 
+                                  placeholder="Welcome to our platform!"
+                                  value={p.body || ''}
+                                  onChange={(e) => updateNodeParameters(selectedNode.id, { body: e.target.value })}
+                                  rows={8}
+                                />
+                              </div>
+                            </>
+                          )}
+                        </>
+                      );
+                    })()}
+                    {selectedNode.data.type === 'gemini' && (
                       <>
                         <div className="form-group">
-                          <label>To Email</label>
+                          <label>API Key</label>
                           <input 
-                            type="text" 
-                            placeholder="{{email}}"
-                            value={p.to || ''}
-                            onChange={(e) => updateNodeParameters(selectedNode.id, { to: e.target.value })}
+                            type="password" 
+                            placeholder="AIzaSy..."
+                            value={p.apiKey || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { apiKey: e.target.value })}
                           />
                         </div>
                         <div className="form-group">
-                          <label>Subject</label>
+                          <label>Model Name</label>
                           <input 
                             type="text" 
-                            placeholder="Hello {{name}}"
-                            value={p.subject || ''}
-                            onChange={(e) => updateNodeParameters(selectedNode.id, { subject: e.target.value })}
+                            placeholder="gemini-1.5-flash"
+                            value={p.model || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { model: e.target.value })}
                           />
                         </div>
                         <div className="form-group">
-                          <label>Body (Text/HTML)</label>
+                          <label>Prompt</label>
                           <textarea 
-                            placeholder="Welcome to our platform!"
-                            value={p.body || ''}
-                            onChange={(e) => updateNodeParameters(selectedNode.id, { body: e.target.value })}
+                            placeholder="Write a cold email to {{Name}}..."
+                            value={p.prompt || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { prompt: e.target.value })}
                             rows={8}
                           />
                         </div>
@@ -956,6 +1161,34 @@ const App = () => {
             })()}
           </div>
         )}
+
+        {/* Execution Logs Panel */}
+        <div className={`logs-panel ${isLogsOpen ? 'open' : ''}`}>
+          <div className="logs-header" onClick={() => setIsLogsOpen(!isLogsOpen)}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Zap size={16} color={isExecuting ? 'var(--color-gemini)' : 'var(--text-secondary)'} className={isExecuting ? 'spin-animation' : ''} />
+              <strong>Execution Logs</strong>
+            </div>
+            <button className="btn" style={{ background: 'transparent', border: 'none', padding: '2px' }}>
+              {isLogsOpen ? '▼' : '▲'}
+            </button>
+          </div>
+          <div className="logs-content">
+            {executionLogs.length === 0 ? (
+              <div style={{ color: 'var(--text-secondary)', textAlign: 'center', marginTop: '20px', fontSize: '13px' }}>
+                No logs to display. Run the workflow.
+              </div>
+            ) : (
+              executionLogs.map((log, idx) => (
+                <div key={idx} className={`log-entry log-${log.type}`}>
+                  <span className="log-time">[{log.timestamp}]</span>
+                  <span className="log-msg">{log.message}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
       </div>
     </div>
   );
