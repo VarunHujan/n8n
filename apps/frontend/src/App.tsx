@@ -15,7 +15,9 @@ import {
 } from '@xyflow/react';
 import type { Connection, Edge, Node } from '@xyflow/react';
 import { CustomNode } from './CustomNode';
-import { Play, Save, Zap, Globe, Database, Shuffle, Sun, Moon, Lock, Unlock, Trash, Unlink, Plus, PanelLeftClose, PanelLeft } from 'lucide-react';
+import { useGoogleLogin } from '@react-oauth/google';
+import { jwtDecode } from 'jwt-decode';
+import { Play, Save, Zap, Globe, Database, Shuffle, Sun, Moon, Lock, Unlock, Trash, Unlink, Plus, PanelLeftClose, PanelLeft, FileSpreadsheet, Mail } from 'lucide-react';
 import './index.css';
 
 const nodeTypes = {
@@ -28,10 +30,10 @@ const initialNodes: Node[] = [
     type: 'customNode',
     position: { x: 100, y: 150 },
     data: { 
-      type: 'webhook', 
-      label: 'Webhook Trigger', 
-      description: 'Starts the workflow on a webhook hit',
-      configSummary: 'POST /webhook/xyz',
+      type: 'manual_trigger', 
+      label: 'Manual Trigger', 
+      description: 'Starts the workflow when you click Play',
+      configSummary: 'Click to run',
       parameters: {}
     },
   }
@@ -42,8 +44,27 @@ const App = () => {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(import.meta.env.VITE_REQUIRE_LOGIN !== 'true');
+  const [userProfile, setUserProfile] = useState<{name: string, email: string} | null>(
+    import.meta.env.VITE_REQUIRE_LOGIN !== 'true' ? { name: 'Guest User', email: 'guest@local' } : null
+  );
+  const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   
-  // Floating Sidebar State
+  const updateNodeParameters = (nodeId: string, newParams: any) => {
+    setNodes(nds => nds.map(n => {
+      if (n.id === nodeId) {
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            parameters: { ...(n.data.parameters || {}), ...newParams }
+          }
+        };
+      }
+      return n;
+    }));
+  };
   const [sidebarConfig, setSidebarConfig] = useState({
     isMinimized: false,
     position: { x: 16, y: 16 }
@@ -128,6 +149,7 @@ const App = () => {
     screenPos: { x: number; y: number };
   }>({
     isOpen: false,
+    sourceNodeId: null,
     position: { x: 0, y: 0 },
     screenPos: { x: 0, y: 0 }
   });
@@ -395,11 +417,17 @@ const App = () => {
     const workflow = {
       id: 'demo_workflow',
       name: 'Demo Visual Workflow',
-      nodes: nodes.map(n => ({
-        id: n.id,
-        type: n.data.type,
-        parameters: n.data.parameters || {}
-      })),
+      nodes: nodes.map(n => {
+        const params: any = { ...(n.data.parameters || {}) };
+        if (n.data.type === 'gmail_send') {
+          params.accessToken = accessToken;
+        }
+        return {
+          id: n.id,
+          type: n.data.type,
+          parameters: params
+        };
+      }),
       edges: edges.map(e => ({
         id: e.id,
         source: e.source,
@@ -413,7 +441,7 @@ const App = () => {
       const res = await fetch('http://localhost:3000/workflows/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workflow, initialPayload: { message: 'Triggered from React UI' } })
+        body: JSON.stringify({ workflow, initialPayload: { message: 'Triggered from React UI', accessToken } })
       });
       const data = await res.json();
       
@@ -438,8 +466,73 @@ const App = () => {
     return true;
   }, []);
 
+  const handleLogin = useGoogleLogin({
+    flow: 'auth-code',
+    scope: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly',
+    onSuccess: async (codeResponse) => {
+      console.log('Got Auth Code:', codeResponse.code);
+      
+      // Send the code to our NestJS backend to exchange for tokens
+      try {
+        const res = await fetch('http://localhost:3000/auth/google', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: codeResponse.code })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+          setUserProfile({ name: data.user.name, email: data.user.email });
+          setAccessToken(data.access_token);
+          setIsAuthenticated(true);
+        } else {
+          console.error("Backend auth failed:", data.error);
+        }
+      } catch (error) {
+        console.error("Failed to authenticate with backend", error);
+      }
+    },
+    onError: (error) => console.log('Login Failed:', error)
+  });
+
+  if (!isAuthenticated) {
+    return (
+      <div className="login-screen">
+        <div className="login-card">
+          <div className="login-icon-wrapper">
+            <Zap size={32} />
+          </div>
+          <h1 className="login-title">Welcome Back</h1>
+          <p className="login-subtitle">Sign in to sync your workflows and authenticate your automation nodes.</p>
+          
+          <button className="google-auth-btn" onClick={handleLogin}>
+            <svg width="20" height="20" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M47.532 24.5528C47.532 22.9214 47.3997 21.2811 47.1175 19.6761H24.48V28.9181H37.4434C36.9055 31.8988 35.177 34.5356 32.6461 36.2111V42.2078H40.3801C44.9217 38.0278 47.532 31.8547 47.532 24.5528Z" fill="#4285F4"/>
+              <path d="M24.48 48.0016C30.9529 48.0016 36.4116 45.8764 40.3888 42.2078L32.6549 36.2111C30.5031 37.675 27.7253 38.5056 24.48 38.5056C18.2276 38.5056 12.9305 34.2798 11.0139 28.6006H3.03296V34.7825C7.10718 42.8868 15.4056 48.0016 24.48 48.0016Z" fill="#34A853"/>
+              <path d="M11.0051 28.6006C9.99973 25.6199 9.99973 22.3923 11.0051 19.4117V13.2297H3.03296C-0.371021 20.0012 -0.371021 28.0111 3.03296 34.7825L11.0051 28.6006Z" fill="#FBBC04"/>
+              <path d="M24.48 9.49606C27.9016 9.42125 31.2086 10.7027 33.6841 13.0573L40.5387 6.20263C36.1956 2.14818 30.4184 -0.0619894 24.48 0.00125439C15.4056 0.00125439 7.10718 5.11603 3.03296 13.2297L11.0051 19.4117C12.9129 13.7237 18.2188 9.49606 24.48 9.49606Z" fill="#EA4335"/>
+            </svg>
+            Continue with Google
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app-layout" data-theme={theme}>
+      
+      {/* Top Right User Profile Badge */}
+      {userProfile && (
+        <div className="user-profile-badge">
+          <div className="user-avatar">{userProfile.name.charAt(0)}</div>
+          <div className="user-details">
+            <span className="user-name">{userProfile.name}</span>
+            <span className="user-status">Authenticated</span>
+          </div>
+        </div>
+      )}
+
       {/* Floating Draggable Sidebar / Palette */}
       {sidebarConfig.isMinimized ? (
         <div 
@@ -469,37 +562,31 @@ const App = () => {
           </div>
           <div className="node-list">
             <p className="node-list-title">AVAILABLE NODES</p>
-            <div className="dndnode webhook" onDragStart={(e) => onDragStart(e, 'webhook', 'Webhook Trigger', 'Starts on incoming HTTP request')} draggable>
-              <div className="sidebar-icon icon-trigger"><Zap size={20} /></div>
+            
+            <div className="dndnode manual_trigger" onDragStart={(e) => onDragStart(e, 'manual_trigger', 'Manual Trigger', 'Starts workflow when you click Execute')} draggable>
+              <div className="sidebar-icon" style={{ color: 'var(--color-manual_trigger)' }}><Play size={20} /></div>
               <div>
-                <strong>Webhook</strong>
-                <span>Trigger on HTTP request</span>
+                <strong>Manual Trigger</strong>
+                <span>Click to start workflow</span>
               </div>
             </div>
 
-            <div className="dndnode http_request" onDragStart={(e) => onDragStart(e, 'http_request', 'HTTP Request', 'Makes an external API call')} draggable>
-              <div className="sidebar-icon icon-action"><Globe size={20} /></div>
+            <div className="dndnode csv_input" onDragStart={(e) => onDragStart(e, 'csv_input', 'CSV Data', 'Provides tabular data like emails and names')} draggable>
+              <div className="sidebar-icon" style={{ color: 'var(--color-csv_input)' }}><FileSpreadsheet size={20} /></div>
               <div>
-                <strong>HTTP Request</strong>
-                <span>Makes an API call</span>
+                <strong>CSV Data</strong>
+                <span>Tabular data source</span>
               </div>
             </div>
 
-            <div className="dndnode set_data" onDragStart={(e) => onDragStart(e, 'set_data', 'Set Data', 'Sets or merges specific fields')} draggable>
-              <div className="sidebar-icon icon-data"><Database size={20} /></div>
+            <div className="dndnode gmail_send" onDragStart={(e) => onDragStart(e, 'gmail_send', 'Send Gmail', 'Sends an email using your authenticated account')} draggable>
+              <div className="sidebar-icon" style={{ color: 'var(--color-gmail_send)' }}><Mail size={20} /></div>
               <div>
-                <strong>Set Data</strong>
-                <span>Transforms data</span>
+                <strong>Send Gmail</strong>
+                <span>Sends an email</span>
               </div>
             </div>
 
-            <div className="dndnode if_condition" onDragStart={(e) => onDragStart(e, 'if_condition', 'If / Else', 'Branches workflow based on condition')} draggable>
-              <div className="sidebar-icon icon-logic"><Shuffle size={20} /></div>
-              <div>
-                <strong>If Condition</strong>
-                <span>Branches the logic</span>
-              </div>
-            </div>
           </div>
         </div>
       )}
@@ -535,14 +622,14 @@ const App = () => {
             <div>
               <div className="quick-add-title">ADD NEW NODE</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('http_request', 'HTTP Request', 'Makes API call')}>
-                  <Globe size={16} color="var(--color-action)" /> HTTP Request
+                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('manual_trigger', 'Manual Trigger', 'Starts workflow')}>
+                  <Play size={16} color="var(--color-manual_trigger)" /> Manual Trigger
                 </button>
-                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('set_data', 'Set Data', 'Sets fields')}>
-                  <Database size={16} color="var(--color-data)" /> Set Data
+                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('csv_input', 'CSV Data', 'Tabular data source')}>
+                  <FileSpreadsheet size={16} color="var(--color-csv_input)" /> CSV Data
                 </button>
-                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('if_condition', 'If / Else', 'Logic branch')}>
-                  <Shuffle size={16} color="var(--color-logic)" /> If Condition
+                <button className="btn" style={{ justifyContent: 'flex-start', border: 'none', background: 'transparent', padding: '10px 12px' }} onClick={() => addNodeFromMenu('gmail_send', 'Send Gmail', 'Sends an email')}>
+                  <Mail size={16} color="var(--color-gmail_send)" /> Send Gmail
                 </button>
               </div>
             </div>
@@ -752,6 +839,8 @@ const App = () => {
           onConnectStart={onConnectStart}
           onConnectEnd={onConnectEnd}
           onEdgeClick={onEdgeClick}
+          onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+          onPaneClick={() => setSelectedNodeId(null)}
           isValidConnection={isValidConnection}
           onDragOver={onDragOver}
           onDrop={onDrop}
@@ -792,8 +881,81 @@ const App = () => {
               transition: 'opacity 0.5s ease-in-out'
             }}
           />
-          <Controls position="bottom-right" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '8px', fill: 'var(--text-secondary)' }} />
+          <Controls style={{ left: 16 }} />
         </ReactFlow>
+
+        {/* Right Sidebar for Node Properties */}
+        {selectedNodeId && (
+          <div className="properties-panel">
+            {(() => {
+              const selectedNode = nodes.find(n => n.id === selectedNodeId);
+              if (!selectedNode) return null;
+              
+              const p = selectedNode.data.parameters || {};
+
+              return (
+                <>
+                  <div className="properties-header">
+                    <h2>{selectedNode.data.label as string}</h2>
+                    <button className="close-btn" onClick={() => setSelectedNodeId(null)}>×</button>
+                  </div>
+                  <div className="properties-content">
+                    {selectedNode.data.type === 'csv_input' && (
+                      <div className="form-group">
+                        <label>CSV Data (Paste here)</label>
+                        <textarea 
+                          placeholder="email,name&#10;test@example.com,John"
+                          value={p.csvData || ''}
+                          onChange={(e) => updateNodeParameters(selectedNode.id, { csvData: e.target.value })}
+                          rows={10}
+                        />
+                      </div>
+                    )}
+                    {selectedNode.data.type === 'gmail_send' && (
+                      <>
+                        <div className="form-group">
+                          <label>To Email</label>
+                          <input 
+                            type="text" 
+                            placeholder="{{email}}"
+                            value={p.to || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { to: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Subject</label>
+                          <input 
+                            type="text" 
+                            placeholder="Hello {{name}}"
+                            value={p.subject || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { subject: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Body (Text/HTML)</label>
+                          <textarea 
+                            placeholder="Welcome to our platform!"
+                            value={p.body || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { body: e.target.value })}
+                            rows={8}
+                          />
+                        </div>
+                      </>
+                    )}
+                    {selectedNode.data.type === 'manual_trigger' && (
+                      <div className="form-group">
+                        <label>Info</label>
+                        <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                          Click the "Execute Workflow" button to run the flow from this node.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        )}
       </div>
     </div>
   );

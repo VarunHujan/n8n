@@ -1,6 +1,6 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Zap, Globe, Database, Shuffle, Plus, Lock } from 'lucide-react';
+import { Zap, Globe, Database, Shuffle, Plus, Lock, Play, Mail, FileSpreadsheet } from 'lucide-react';
 
 export const CustomNode = ({ id, data }: any) => {
   const isLocked = !!data.isLocked;
@@ -8,6 +8,9 @@ export const CustomNode = ({ id, data }: any) => {
   const getIcon = () => {
     switch (data.type) {
       case 'webhook': return <Zap size={20} />;
+      case 'manual_trigger': return <Play size={20} />;
+      case 'csv_input': return <FileSpreadsheet size={20} />;
+      case 'gmail_send': return <Mail size={20} />;
       case 'http_request': return <Globe size={20} />;
       case 'set_data': return <Database size={20} />;
       case 'if_condition': return <Shuffle size={20} />;
@@ -52,17 +55,15 @@ export const CustomNode = ({ id, data }: any) => {
       data-type={data.type}
       onContextMenu={handleContextMenu}
       style={{
-        '--node-color': colorVar,
-        '--node-color-bg': bgVar,
         transition: 'all 0.3s ease',
         ...(isLocked ? {
           borderColor: 'var(--color-action)',
           boxShadow: '0 0 0 2px var(--color-action), 0 4px 20px rgba(0,0,0,0.1)'
         } : {})
-      }}
+      } as React.CSSProperties}
     >
       {/* Target handle (input) */}
-      {data.type !== 'webhook' && (
+      {(data.type !== 'webhook' && data.type !== 'manual_trigger') && (
         <Handle 
           type="target" 
           position={Position.Left} 
@@ -103,7 +104,7 @@ export const CustomNode = ({ id, data }: any) => {
         type="source" 
         position={Position.Right} 
         id={data.type === 'if_condition' ? 'true' : 'default'} 
-        className={isLocked ? `giant-source-handle ${data.type === 'webhook' ? 'giant-source-handle-full' : ''}` : ""}
+        className={isLocked ? `giant-source-handle ${(data.type === 'webhook' || data.type === 'manual_trigger') ? 'giant-source-handle-full' : ''}` : ""}
         style={data.type === 'if_condition' ? { top: '35%' } : undefined}
       />
       {data.type === 'if_condition' && (

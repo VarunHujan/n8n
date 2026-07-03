@@ -5,6 +5,10 @@ import { HttpNode } from './nodes/http.node';
 import { SetNode } from './nodes/set.node';
 import { WebhookNode } from './nodes/webhook.node';
 import { IfNode } from './nodes/if.node';
+import { ManualTriggerNode } from './nodes/manual.node';
+import { CsvNode } from './nodes/csv.node';
+import { GmailSendNode } from './nodes/gmail.node';
+import { GeminiNode } from './nodes/gemini.node';
 
 @Injectable()
 export class DagWalkerService {
@@ -16,6 +20,10 @@ export class DagWalkerService {
     this.registerNode(new SetNode());
     this.registerNode(new WebhookNode());
     this.registerNode(new IfNode());
+    this.registerNode(new ManualTriggerNode());
+    this.registerNode(new CsvNode());
+    this.registerNode(new GmailSendNode());
+    this.registerNode(new GeminiNode());
   }
 
   private registerNode(node: INode) {
@@ -45,7 +53,7 @@ export class DagWalkerService {
       const incomingEdges = workflow.edges.filter(e => e.target === nodeDef.id);
       const incomingData = incomingEdges.map(edge => executionData.get(edge.source));
 
-      if (nodeDef.type === 'webhook') {
+      if (nodeDef.type === 'webhook' || nodeDef.type === 'manual_trigger') {
         nodeDef.parameters.payload = initialPayload;
       }
 
