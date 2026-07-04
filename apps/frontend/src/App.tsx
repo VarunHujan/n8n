@@ -536,13 +536,36 @@ const App = () => {
     
     addLog('Starting workflow execution...', 'info');
     
+    // Check and refresh token if needed
+    let currentToken = localStorage.getItem('auth_token');
+    const refreshTokenStr = localStorage.getItem('refresh_token');
+    if (refreshTokenStr) {
+      try {
+        const refreshRes = await fetch('http://localhost:3000/auth/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refresh_token: refreshTokenStr })
+        });
+        const refreshData = await refreshRes.json();
+        if (refreshData.success) {
+          currentToken = refreshData.access_token;
+          localStorage.setItem('auth_token', currentToken!);
+          if (refreshData.refresh_token) {
+            localStorage.setItem('refresh_token', refreshData.refresh_token);
+          }
+        }
+      } catch (e) {
+        addLog('Silent token refresh failed. You may need to sign in again.', 'error');
+      }
+    }
+    
     const workflow = {
       id: 'demo_workflow',
       name: 'Demo Visual Workflow',
       nodes: nodes.map(n => {
         const params: any = { ...(n.data.parameters || {}) };
         if (n.data.type === 'gmail') {
-          params.accessToken = accessToken;
+          params.accessToken = currentToken;
         }
         return {
           id: n.id,
@@ -566,7 +589,7 @@ const App = () => {
         body: JSON.stringify({ 
           workflow, 
           initialPayload: {},
-          sysContext: { googleAccessToken: localStorage.getItem('auth_token') }
+          sysContext: { googleAccessToken: currentToken }
         })
       });
       
@@ -1082,6 +1105,24 @@ const App = () => {
                             <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
                               All emails will be rigorously verified before sending to avoid bounces.
                             </p>
+                          </div>
+                          
+                          <div className="form-group">
+                            <label>Cc (Optional)</label>
+                            <EmailAutocomplete 
+                              value={p.cc || ''} 
+                              onChange={(val) => updateNodeParameters(selectedNode.id, { cc: val })} 
+                              isMultiple={true} 
+                            />
+                          </div>
+
+                          <div className="form-group">
+                            <label>Bcc (Optional)</label>
+                            <EmailAutocomplete 
+                              value={p.bcc || ''} 
+                              onChange={(val) => updateNodeParameters(selectedNode.id, { bcc: val })} 
+                              isMultiple={true} 
+                            />
                           </div>
                           
                           {isLinkedToGemini ? (
