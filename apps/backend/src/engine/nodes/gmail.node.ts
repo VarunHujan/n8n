@@ -14,7 +14,6 @@ export class GmailNode implements INode {
     }
 
     const auth = new google.auth.OAuth2();
-    require('fs').writeFileSync('token_debug.log', `Token: ${accessToken}\nLength: ${accessToken?.length}\n`);
     this.logger.log(`Using access token: ${accessToken.substring(0, 10)}...`);
     auth.setCredentials({ access_token: accessToken });
     const gmail = google.gmail({ version: 'v1', auth });

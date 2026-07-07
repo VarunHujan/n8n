@@ -121,12 +121,37 @@ export class DagWalkerService {
     return executionData;
   }
 
+  private resolvePath(expr: string, context: Record<string, any>): any {
+    const trimmed = expr.trim();
+    const nodeMatch = trimmed.match(/^\$node\[(?:"([^"]+)"|'([^']+)')\]/);
+    if (!nodeMatch) {
+      return undefined;
+    }
+    const nodeId = nodeMatch[1] || nodeMatch[2];
+    let current = context[nodeId];
+    if (current === undefined) {
+      return undefined;
+    }
+
+    const remaining = trimmed.slice(nodeMatch[0].length);
+    const segmentRegex = /\.([a-zA-Z_$][\w$]*)|\[(\d+)\]|\["([^"]*)"\]|\['([^']*)'\]/g;
+    let match;
+    
+    while ((match = segmentRegex.exec(remaining)) !== null) {
+      if (current === null || current === undefined) {
+        return undefined;
+      }
+      const prop = match[1] ?? match[2] ?? match[3] ?? match[4];
+      current = current[prop];
+    }
+    return current;
+  }
+
   private resolveParameters(params: Record<string, any>, executionData: Map<string, any>): Record<string, any> {
     const resolved: Record<string, any> = {};
     const context: any = { $node: {} };
     
     executionData.forEach((value, key) => {
-      // Allows expressions like {{ $node["node_id"].data.field }}
       context.$node[key] = { data: value };
     });
 
@@ -135,23 +160,13 @@ export class DagWalkerService {
         // Exact match -> Return the actual object (not stringified)
         const exactMatch = val.match(/^{{(.*?)}}$/);
         if (exactMatch) {
-          try {
-            const func = new Function('$node', `return ${exactMatch[1]}`);
-            return func(context.$node);
-          } catch (e) {
-             this.logger.warn(`Failed to evaluate exact expression: ${exactMatch[1]}`);
-             return val;
-          }
+          const res = this.resolvePath(exactMatch[1], context.$node);
+          return res !== undefined ? res : val;
         }
         // Partial match -> String replacement
         return val.replace(/{{(.*?)}}/g, (match, expr) => {
-          try {
-            const func = new Function('$node', `return ${expr}`);
-            return func(context.$node);
-          } catch (e) {
-            this.logger.warn(`Failed to evaluate expression: ${expr}`);
-            return match;
-          }
+          const res = this.resolvePath(expr, context.$node);
+          return res !== undefined ? String(res) : '';
         });
       }
       if (Array.isArray(val)) return val.map(evaluate);

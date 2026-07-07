@@ -8,3 +8,4 @@ coverage/
 *.log
 .agents/
 .gemini/
+token_debug.log
