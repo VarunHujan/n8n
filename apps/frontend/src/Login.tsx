@@ -13,6 +13,7 @@ export const LoginScreen: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const handleLogin = useGoogleLogin({
     flow: 'auth-code',
     scope: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/contacts.readonly',
+    // @ts-ignore - prompt is valid but type definitions may not include it
     prompt: 'consent',
     // @ts-ignore - access_type is supported by the underlying Google GIS but types might complain
     access_type: 'offline',

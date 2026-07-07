@@ -221,22 +221,111 @@ const App = () => {
     if (saved) return JSON.parse(saved);
     return import.meta.env.VITE_REQUIRE_LOGIN !== 'true' ? { name: 'Guest User', email: 'guest@local' } : null;
   });
-  const [accessToken] = useState<string | null>(() => {
-    return localStorage.getItem('auth_token') || null;
-  });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   
-  const saveWorkflow = useCallback((currentNodes: Node[], currentEdges: Edge[]) => {
+  // Database Persistence States
+  const [workflowId, setWorkflowId] = useState<string | null>(() => {
+    return localStorage.getItem('n8n_current_workflow_id') || null;
+  });
+  const [workflowName, setWorkflowName] = useState<string>(() => {
+    return localStorage.getItem('n8n_current_workflow_name') || 'My Workflow';
+  });
+  const [workflowsList, setWorkflowsList] = useState<{ id: string; name: string }[]>([]);
+
+  const addLog = useCallback((msg: string, type: 'info' | 'error' | 'success' = 'info') => {
+    setExecutionLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: msg, type }]);
+  }, []);
+
+  const fetchWorkflowsList = useCallback(async () => {
     try {
-      localStorage.setItem('n8n_workflow', JSON.stringify({
-        nodes: currentNodes,
-        edges: currentEdges,
-        savedAt: new Date().toISOString()
-      }));
+      const res = await fetch('http://localhost:3000/workflows');
+      if (res.ok) {
+        const list = await res.json();
+        setWorkflowsList(list);
+      }
     } catch (e) {
-      console.warn('Failed to save workflow:', e);
+      console.error('Failed to fetch workflows list:', e);
     }
   }, []);
+
+  const loadWorkflow = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`http://localhost:3000/workflows/${id}`);
+      if (res.ok) {
+        const wf = await res.json();
+        setWorkflowId(wf.id);
+        setWorkflowName(wf.name);
+        setNodes(wf.nodes || []);
+        setEdges(wf.edges || []);
+        localStorage.setItem('n8n_current_workflow_id', wf.id);
+        localStorage.setItem('n8n_current_workflow_name', wf.name);
+        addLog(`Loaded workflow: ${wf.name}`, 'success');
+      } else {
+        addLog('Failed to load workflow from server', 'error');
+      }
+    } catch (e) {
+      addLog('Error loading workflow from server', 'error');
+    }
+  }, [setNodes, setEdges, addLog]);
+
+  const createNewWorkflow = useCallback(() => {
+    setWorkflowId(null);
+    setWorkflowName('My Workflow');
+    setNodes(defaultNodes);
+    setEdges([]);
+    localStorage.removeItem('n8n_current_workflow_id');
+    localStorage.setItem('n8n_current_workflow_name', 'My Workflow');
+    addLog('Created new workflow', 'info');
+  }, [setNodes, setEdges, addLog]);
+
+  const saveWorkflow = useCallback(async (currentNodes: Node[], currentEdges: Edge[]) => {
+    try {
+      addLog('Saving workflow to backend...', 'info');
+      const res = await fetch('http://localhost:3000/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: workflowId || undefined,
+          name: workflowName,
+          nodes: currentNodes,
+          edges: currentEdges
+        })
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        setWorkflowId(saved.id);
+        setWorkflowName(saved.name);
+        localStorage.setItem('n8n_current_workflow_id', saved.id);
+        localStorage.setItem('n8n_current_workflow_name', saved.name);
+        addLog(`Workflow "${saved.name}" saved successfully!`, 'success');
+        fetchWorkflowsList();
+      } else {
+        addLog('Failed to save workflow to backend', 'error');
+      }
+    } catch (e: any) {
+      addLog(`Failed to save workflow: ${e.message}`, 'error');
+    }
+  }, [workflowId, workflowName, addLog, fetchWorkflowsList]);
+
+  const deleteWorkflow = useCallback(async (id: string) => {
+    if (!confirm('Are you sure you want to delete this workflow?')) return;
+    try {
+      const res = await fetch(`http://localhost:3000/workflows/${id}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        addLog('Workflow deleted successfully', 'success');
+        if (workflowId === id) {
+          createNewWorkflow();
+        }
+        fetchWorkflowsList();
+      } else {
+        addLog('Failed to delete workflow', 'error');
+      }
+    } catch (e: any) {
+      addLog(`Failed to delete workflow: ${e.message}`, 'error');
+    }
+  }, [workflowId, createNewWorkflow, fetchWorkflowsList, addLog]);
 
   const updateNodeParameters = (nodeId: string, newParams: any) => {
     setNodes(nds => nds.map(n => {
@@ -314,6 +403,14 @@ const App = () => {
       };
     }));
   }, [theme, nodes, setEdges]);
+
+  useEffect(() => {
+    fetchWorkflowsList();
+    const storedWfId = localStorage.getItem('n8n_current_workflow_id');
+    if (storedWfId) {
+      loadWorkflow(storedWfId);
+    }
+  }, [fetchWorkflowsList, loadWorkflow]);
 
   const toggleTheme = () => {
     setTheme(prev => prev === 'light' ? 'dark' : 'light');
@@ -606,10 +703,6 @@ const App = () => {
     setExecutionLogs([]);
     setIsLogsOpen(true);
     
-    const addLog = (msg: string, type: 'info' | 'error' | 'success' = 'info') => {
-      setExecutionLogs(prev => [...prev, { timestamp: new Date().toLocaleTimeString(), message: msg, type }]);
-    };
-    
     addLog('Starting workflow execution...', 'info');
     
     // Check and refresh token if needed
@@ -844,6 +937,64 @@ const App = () => {
           <button className="btn" onClick={toggleTheme} aria-label="Toggle Theme">
             {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
+
+          {/* Workflow selection and name editing controls */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <select
+              value={workflowId || ''}
+              onChange={(e) => {
+                if (e.target.value === 'new') {
+                  createNewWorkflow();
+                } else if (e.target.value) {
+                  loadWorkflow(e.target.value);
+                }
+              }}
+              className="btn"
+              style={{
+                padding: '8px 12px',
+                minWidth: '150px',
+                background: 'var(--bg-panel)',
+                border: '1px solid var(--border-color)',
+                borderRadius: '8px',
+                color: 'var(--text-primary)',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="" disabled>Select Workflow...</option>
+              <option value="new">+ Create New Workflow</option>
+              {workflowsList.map(wf => (
+                <option key={wf.id} value={wf.id}>{wf.name}</option>
+              ))}
+            </select>
+
+            <input
+              type="text"
+              className="btn"
+              style={{
+                fontWeight: 'bold',
+                width: '180px',
+                border: '1px solid var(--border-color)',
+                outline: 'none',
+                background: 'var(--bg-panel)',
+                color: 'var(--text-primary)'
+              }}
+              value={workflowName}
+              placeholder="Workflow Name"
+              onChange={(e) => setWorkflowName(e.target.value)}
+            />
+
+            {workflowId && (
+              <button 
+                className="btn" 
+                onClick={() => deleteWorkflow(workflowId)} 
+                style={{ borderColor: 'var(--color-if_condition)', color: 'var(--color-if_condition)', padding: '8px 12px' }} 
+                title="Delete Workflow"
+              >
+                <Trash size={16} />
+              </button>
+            )}
+          </div>
+
           <button className="btn" onClick={() => saveWorkflow(nodes, edges)}>
             <Save size={16} /> Save
           </button>
