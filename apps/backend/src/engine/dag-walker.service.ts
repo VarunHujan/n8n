@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { WorkflowDefinition, NodeDefinition } from '../shared-types';
+import { WorkflowDefinition, NodeDefinition, EdgeDefinition } from '../shared-types';
 import { INode } from './node.interface';
 import { HttpNode } from './nodes/http.node';
 import { SetNode } from './nodes/set.node';
@@ -33,27 +33,42 @@ export class DagWalkerService {
   async executeWorkflow(workflow: WorkflowDefinition, initialPayload: any, sysContext?: Record<string, any>, emit?: (event: any) => void) {
     this.logger.log(`Starting execution for workflow: ${workflow.name}`);
     const executionData = new Map<string, any>();
-    const nodesMap = new Map(workflow.nodes.map(n => [n.id, n]));
+    const nodesMap = new Map<string, NodeDefinition>(workflow.nodes.map((n: NodeDefinition) => [n.id, n]));
     
     // Find trigger nodes (in-degree 0)
-    const targets = new Set(workflow.edges.map(e => e.target));
-    const startNodes = workflow.nodes.filter(n => !targets.has(n.id));
+    const targets = new Set(workflow.edges.map((e: EdgeDefinition) => e.target));
+    const startNodes = workflow.nodes.filter((n: NodeDefinition) => !targets.has(n.id));
 
-    const queue = [...startNodes];
+    const queue: NodeDefinition[] = [...startNodes];
     const executed = new Set<string>();
+    const failed = new Set<string>();
 
     while (queue.length > 0) {
       const nodeDef = queue.shift()!;
-      if (executed.has(nodeDef.id)) continue;
+      if (executed.has(nodeDef.id) || failed.has(nodeDef.id)) continue;
       
+      // Skip nodes whose upstream dependencies have failed
+      const incomingEdges = workflow.edges.filter((e: EdgeDefinition) => e.target === nodeDef.id);
+      const hasFailedDependency = incomingEdges.some((edge: EdgeDefinition) => failed.has(edge.source));
+      if (hasFailedDependency) {
+        this.logger.warn(`Skipping node ${nodeDef.id} — upstream dependency failed`);
+        failed.add(nodeDef.id);
+        if (emit) emit({ type: 'node-error', nodeId: nodeDef.id, error: 'Skipped: upstream node failed' });
+        continue;
+      }
+
       this.logger.log(`Executing node: ${nodeDef.id} (${nodeDef.type})`);
       if (emit) emit({ type: 'node-start', nodeId: nodeDef.id });
 
       const nodeInstance = this.nodeRegistry.get(nodeDef.type);
-      if (!nodeInstance) throw new Error(`Unknown node type: ${nodeDef.type}`);
+      if (!nodeInstance) {
+        this.logger.error(`Unknown node type: ${nodeDef.type}`);
+        failed.add(nodeDef.id);
+        if (emit) emit({ type: 'node-error', nodeId: nodeDef.id, error: `Unknown node type: ${nodeDef.type}` });
+        continue;
+      }
 
-      const incomingEdges = workflow.edges.filter(e => e.target === nodeDef.id);
-      const incomingData = incomingEdges.map(edge => executionData.get(edge.source));
+      const incomingData = incomingEdges.map((edge: EdgeDefinition) => executionData.get(edge.source));
 
       if (nodeDef.type === 'webhook' || nodeDef.type === 'manual_trigger') {
         nodeDef.parameters.payload = initialPayload;
@@ -71,17 +86,22 @@ export class DagWalkerService {
 
       if (!result.success) {
         this.logger.error(`Node ${nodeDef.id} failed: ${result.error}`);
+        failed.add(nodeDef.id);
         if (emit) emit({ type: 'node-error', nodeId: nodeDef.id, error: result.error });
-        throw new Error(`Workflow execution halted at node ${nodeDef.id}: ${result.error}`);
+        // Don't throw — let other independent branches continue
+        continue;
       }
 
       this.logger.log(`Node ${nodeDef.id} output: ${JSON.stringify(result.data)}`);
       executionData.set(nodeDef.id, result.data);
       executed.add(nodeDef.id);
-      if (emit) emit({ type: 'node-end', nodeId: nodeDef.id });
+
+      // Include a summary of the output data in the SSE event
+      const outputSummary = this.summarizeOutput(result.data);
+      if (emit) emit({ type: 'node-end', nodeId: nodeDef.id, outputSummary });
 
       // Find outgoing edges that match the returned branch
-      const outgoingEdges = workflow.edges.filter(e => {
+      const outgoingEdges = workflow.edges.filter((e: EdgeDefinition) => {
         if (e.source !== nodeDef.id) return false;
         if (result.branch) {
           return e.sourceHandle === result.branch;
@@ -91,8 +111,7 @@ export class DagWalkerService {
 
       for (const edge of outgoingEdges) {
         const targetNode = nodesMap.get(edge.target);
-        if (targetNode && !executed.has(targetNode.id)) {
-          // In a complex DAG, we might wait for all inputs. MVP: push to queue immediately.
+        if (targetNode && !executed.has(targetNode.id) && !failed.has(targetNode.id)) {
           queue.push(targetNode);
         }
       }
@@ -151,5 +170,23 @@ export class DagWalkerService {
     }
     
     return resolved;
+  }
+
+  private summarizeOutput(data: any): string {
+    if (data === null || data === undefined) return 'No output';
+    if (Array.isArray(data)) return `Array with ${data.length} item(s)`;
+    if (typeof data === 'object') {
+      const keys = Object.keys(data);
+      if (keys.length === 0) return 'Empty object';
+      const preview = keys.slice(0, 4).map(k => {
+        const val = data[k];
+        if (typeof val === 'string') return `${k}: "${val.slice(0, 40)}${val.length > 40 ? '...' : ''}"`;
+        if (typeof val === 'number' || typeof val === 'boolean') return `${k}: ${val}`;
+        if (Array.isArray(val)) return `${k}: [${val.length} items]`;
+        return `${k}: {...}`;
+      }).join(', ');
+      return `{ ${preview}${keys.length > 4 ? `, +${keys.length - 4} more` : ''} }`;
+    }
+    return String(data).slice(0, 100);
   }
 }

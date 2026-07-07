@@ -22,7 +22,7 @@ const nodeTypes = {
   customNode: CustomNode,
 };
 
-const initialNodes: Node[] = [
+const defaultNodes: Node[] = [
   {
     id: 'node_trigger',
     type: 'customNode',
@@ -36,6 +36,67 @@ const initialNodes: Node[] = [
     },
   }
 ];
+
+const loadSavedWorkflow = (): { nodes: Node[]; edges: Edge[] } => {
+  try {
+    const saved = localStorage.getItem('n8n_workflow');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.nodes && parsed.nodes.length > 0) {
+        return { nodes: parsed.nodes, edges: parsed.edges || [] };
+      }
+    }
+  } catch (e) {
+    console.warn('Failed to load saved workflow:', e);
+  }
+  return { nodes: defaultNodes, edges: [] };
+};
+
+const getConfigSummary = (type: string, params: any): string => {
+  switch (type) {
+    case 'http_request': {
+      const method = params.method || 'GET';
+      const url = params.url || '';
+      if (!url) return 'Config needed';
+      try {
+        const u = new URL(url);
+        return `${method} ${u.pathname}`;
+      } catch {
+        return `${method} ${url.slice(0, 30)}`;
+      }
+    }
+    case 'set_data': {
+      const fields = params.fields || {};
+      const keys = Object.keys(fields);
+      return keys.length > 0 ? `Set { ${keys.join(', ')} }` : 'Config needed';
+    }
+    case 'if_condition': {
+      const field = params.field || '?';
+      const cond = params.condition || 'equals';
+      const val = params.value || '?';
+      return `If ${field} ${cond} ${val}`;
+    }
+    case 'csv_input': {
+      const csv = params.csvData || '';
+      const lines = csv.trim().split('\n');
+      return lines.length > 1 ? `${lines.length - 1} rows` : 'No data';
+    }
+    case 'gmail': {
+      const to = params.to || '';
+      return to ? `To: ${to.slice(0, 25)}...` : 'Config needed';
+    }
+    case 'gemini': {
+      const prompt = params.prompt || '';
+      return prompt ? `Prompt: ${prompt.slice(0, 25)}...` : 'Config needed';
+    }
+    case 'webhook':
+      return params.path ? `POST ${params.path}` : 'POST /webhook';
+    case 'manual_trigger':
+      return 'Click to run';
+    default:
+      return 'Config needed';
+  }
+};
 
 const EmailAutocomplete = ({ value, onChange, isMultiple }: { value: string, onChange: (v: string) => void, isMultiple: boolean }) => {
   const [isOpen, setIsOpen] = useState(false);
@@ -148,8 +209,9 @@ const EmailAutocomplete = ({ value, onChange, isMultiple }: { value: string, onC
 
 const App = () => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const savedWorkflow = loadSavedWorkflow();
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(savedWorkflow.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(savedWorkflow.edges);
   const [isExecuting, setIsExecuting] = useState(false);
   const [runningNode, setRunningNode] = useState<string | null>(null);
   const [executionLogs, setExecutionLogs] = useState<{timestamp: string, message: string, type: 'info' | 'error' | 'success'}[]>([]);
@@ -164,14 +226,28 @@ const App = () => {
   });
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   
+  const saveWorkflow = useCallback((currentNodes: Node[], currentEdges: Edge[]) => {
+    try {
+      localStorage.setItem('n8n_workflow', JSON.stringify({
+        nodes: currentNodes,
+        edges: currentEdges,
+        savedAt: new Date().toISOString()
+      }));
+    } catch (e) {
+      console.warn('Failed to save workflow:', e);
+    }
+  }, []);
+
   const updateNodeParameters = (nodeId: string, newParams: any) => {
     setNodes(nds => nds.map(n => {
       if (n.id === nodeId) {
+        const mergedParams = { ...(n.data.parameters || {}), ...newParams };
         return {
           ...n,
           data: {
             ...n.data,
-            parameters: { ...(n.data.parameters || {}), ...newParams }
+            parameters: mergedParams,
+            configSummary: getConfigSummary(n.data.type as string, mergedParams)
           }
         };
       }
@@ -600,6 +676,9 @@ const App = () => {
                 setRunningNode(event.nodeId);
                 const nodeName = nodes.find(n => n.id === event.nodeId)?.data.label || event.nodeId;
                 addLog(`Node ${nodeName} completed successfully.`, 'success');
+                if (event.outputSummary) {
+                  addLog(`  ↳ Output: ${event.outputSummary}`, 'info');
+                }
               } else if (event.type === 'node-error') {
                 setRunningNode(event.nodeId);
                 const nodeName = nodes.find(n => n.id === event.nodeId)?.data.label || event.nodeId;
@@ -742,7 +821,7 @@ const App = () => {
           <button className="btn" onClick={toggleTheme} aria-label="Toggle Theme">
             {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
           </button>
-          <button className="btn">
+          <button className="btn" onClick={() => saveWorkflow(nodes, edges)}>
             <Save size={16} /> Save
           </button>
           <button className="btn btn-primary" onClick={executeWorkflow} disabled={isExecuting}>
@@ -1154,6 +1233,127 @@ const App = () => {
                           Click the "Execute Workflow" button to run the flow from this node.
                         </p>
                       </div>
+                    )}
+                    {selectedNode.data.type === 'http_request' && (
+                      <>
+                        <div className="form-group">
+                          <label>HTTP Method</label>
+                          <select
+                            value={p.method || 'GET'}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { method: e.target.value })}
+                          >
+                            <option value="GET">GET</option>
+                            <option value="POST">POST</option>
+                            <option value="PUT">PUT</option>
+                            <option value="PATCH">PATCH</option>
+                            <option value="DELETE">DELETE</option>
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>URL</label>
+                          <input
+                            type="text"
+                            placeholder="https://api.example.com/data"
+                            value={p.url || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { url: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Request Body (JSON)</label>
+                          <textarea
+                            placeholder='{"key": "value"}'
+                            value={p.body ? (typeof p.body === 'string' ? p.body : JSON.stringify(p.body, null, 2)) : ''}
+                            onChange={(e) => {
+                              try {
+                                const parsed = JSON.parse(e.target.value);
+                                updateNodeParameters(selectedNode.id, { body: parsed });
+                              } catch {
+                                updateNodeParameters(selectedNode.id, { body: e.target.value });
+                              }
+                            }}
+                            rows={5}
+                          />
+                        </div>
+                      </>
+                    )}
+                    {selectedNode.data.type === 'set_data' && (
+                      <>
+                        <div className="form-group">
+                          <label>Fields (JSON key-value pairs)</label>
+                          <textarea
+                            placeholder='{"source": "api", "processed": true}'
+                            value={p.fields ? JSON.stringify(p.fields, null, 2) : '{}'}
+                            onChange={(e) => {
+                              try {
+                                const parsed = JSON.parse(e.target.value);
+                                updateNodeParameters(selectedNode.id, { fields: parsed });
+                              } catch {
+                                // Let user keep typing invalid JSON
+                              }
+                            }}
+                            rows={6}
+                          />
+                          <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                            These key-value pairs will be merged into the data flowing through the workflow.
+                          </p>
+                        </div>
+                      </>
+                    )}
+                    {selectedNode.data.type === 'if_condition' && (
+                      <>
+                        <div className="form-group">
+                          <label>Field Name</label>
+                          <input
+                            type="text"
+                            placeholder="source"
+                            value={p.field || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { field: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Condition</label>
+                          <select
+                            value={p.condition || 'equals'}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { condition: e.target.value })}
+                          >
+                            <option value="equals">Equals</option>
+                            <option value="not_equals">Not Equals</option>
+                            <option value="greater_than">Greater Than</option>
+                            <option value="less_than">Less Than</option>
+                          </select>
+                        </div>
+                        <div className="form-group">
+                          <label>Value</label>
+                          <input
+                            type="text"
+                            placeholder="expected_value"
+                            value={p.value || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { value: e.target.value })}
+                          />
+                        </div>
+                        <p style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                          Routes to the "True" or "False" output handle based on the result.
+                        </p>
+                      </>
+                    )}
+                    {selectedNode.data.type === 'webhook' && (
+                      <>
+                        <div className="form-group">
+                          <label>Webhook Path</label>
+                          <input
+                            type="text"
+                            placeholder="/webhook/my-trigger"
+                            value={p.path || ''}
+                            onChange={(e) => updateNodeParameters(selectedNode.id, { path: e.target.value })}
+                          />
+                        </div>
+                        <div className="form-group">
+                          <label>Info</label>
+                          <p style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                            This node triggers the workflow when an external HTTP request is received at the configured path.
+                          </p>
+                        </div>
+                      </>
                     )}
                   </div>
                 </>

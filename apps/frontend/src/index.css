@@ -16,6 +16,24 @@
   --color-action: #2563eb;
   --color-data: #059669;
   --color-logic: #d97706;
+
+  --color-webhook: #6366f1;
+  --color-manual_trigger: #a855f7;
+  --color-csv_input: #10b981;
+  --color-gmail: #ef4444;
+  --color-gemini: #7c3aed;
+  --color-http_request: #10b981;
+  --color-set_data: #f59e0b;
+  --color-if_condition: #ef4444;
+
+  --color-webhook-rgb: 99, 102, 241;
+  --color-manual_trigger-rgb: 168, 85, 247;
+  --color-csv_input-rgb: 16, 185, 129;
+  --color-gmail-rgb: 239, 68, 68;
+  --color-gemini-rgb: 124, 58, 237;
+  --color-http_request-rgb: 16, 185, 129;
+  --color-set_data-rgb: 245, 158, 11;
+  --color-if_condition-rgb: 239, 68, 68;
 }
 
 [data-theme="dark"] {

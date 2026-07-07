@@ -10,7 +10,7 @@ export const CustomNode = ({ id, data }: any) => {
       case 'webhook': return <Zap size={20} />;
       case 'manual_trigger': return <Play size={20} />;
       case 'csv_input': return <FileSpreadsheet size={20} />;
-      case 'gmail_send': return <Mail size={20} />;
+      case 'gmail': return <Mail size={20} />;
       case 'http_request': return <Globe size={20} />;
       case 'set_data': return <Database size={20} />;
       case 'if_condition': return <Shuffle size={20} />;
