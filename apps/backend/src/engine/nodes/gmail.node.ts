@@ -14,6 +14,8 @@ export class GmailNode implements INode {
     }
 
     const auth = new google.auth.OAuth2();
+    require('fs').writeFileSync('token_debug.log', `Token: ${accessToken}\nLength: ${accessToken?.length}\n`);
+    this.logger.log(`Using access token: ${accessToken.substring(0, 10)}...`);
     auth.setCredentials({ access_token: accessToken });
     const gmail = google.gmail({ version: 'v1', auth });
 
@@ -38,21 +40,34 @@ export class GmailNode implements INode {
         const subject = config.parameters.subject ? interpolate(config.parameters.subject, item) : (item.generatedSubject || '');
         const body = config.parameters.body ? interpolate(config.parameters.body, item) : (item.generatedBody || '');
 
-        if (!to) {
-          throw new Error('Recipient "to" field is empty after interpolation.');
+        const cc = config.parameters.cc ? interpolate(config.parameters.cc, item) : '';
+        const bcc = config.parameters.bcc ? interpolate(config.parameters.bcc, item) : '';
+
+        if (!to && !cc && !bcc) {
+          throw new Error('No recipient fields (To, Cc, or Bcc) provided.');
         }
 
         // Rigorous verification to avoid blindly sending
         const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-        const emailList = to.split(',').map(e => e.trim()).filter(e => e);
         
-        if (emailList.length === 0) {
-          throw new Error('No valid recipients found in the "To" field.');
-        }
+        const validateAndCleanEmails = (emailString: string, fieldName: string) => {
+          if (!emailString) return '';
+          const emailList = emailString.split(',').map(e => e.trim()).filter(e => e);
+          if (emailList.length === 0) return '';
+          
+          const invalidEmails = emailList.filter(email => !emailRegex.test(email));
+          if (invalidEmails.length > 0) {
+            throw new Error(`Email Verification Failed: Invalid email format detected in "${fieldName}" field for "${invalidEmails.join(', ')}". Sending aborted.`);
+          }
+          return emailList.join(', ');
+        };
 
-        const invalidEmails = emailList.filter(email => !emailRegex.test(email));
-        if (invalidEmails.length > 0) {
-          throw new Error(`Email Verification Failed: Invalid email format detected for "${invalidEmails.join(', ')}". Sending aborted to prevent bounces.`);
+        const cleanedTo = validateAndCleanEmails(to, 'To');
+        const cleanedCc = validateAndCleanEmails(cc, 'Cc');
+        const cleanedBcc = validateAndCleanEmails(bcc, 'Bcc');
+
+        if (!cleanedTo && !cleanedCc && !cleanedBcc) {
+          throw new Error('No valid recipients found.');
         }
 
         if (!subject && !body) {
@@ -61,7 +76,9 @@ export class GmailNode implements INode {
 
         const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
         const messageParts = [
-          `To: ${to}`,
+          ...(cleanedTo ? [`To: ${cleanedTo}`] : []),
+          ...(cleanedCc ? [`Cc: ${cleanedCc}`] : []),
+          ...(cleanedBcc ? [`Bcc: ${cleanedBcc}`] : []),
           'Content-Type: text/html; charset=utf-8',
           'MIME-Version: 1.0',
           `Subject: ${utf8Subject}`,
@@ -91,9 +108,17 @@ export class GmailNode implements INode {
         });
       } catch (err: any) {
         this.logger.error(`Error sending email to item: ${err.message}`);
+        
+        let errorMessage = err.message;
+        if (err.message.includes('invalid authentication credentials') || err.message.includes('Invalid Credentials') || err.code === 401) {
+          errorMessage = 'Google Access Token is expired or missing required Gmail scopes. PLEASE SIGN OUT (using the top right profile icon) AND SIGN BACK IN. When signing in, MAKE SURE to check the checkboxes to grant Gmail access!';
+        } else if (err.code === 403) {
+          errorMessage = 'Insufficient permissions. You did not grant Gmail send permissions during login. Please sign out, sign back in, and check all permission boxes.';
+        }
+
         errors.push({
           item,
-          error: err.message
+          error: errorMessage
         });
       }
     }

@@ -4,7 +4,7 @@ import { Zap } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 interface LoginProps {
-  onLoginSuccess: (token: string, user: { name: string, email: string }) => void;
+  onLoginSuccess: (token: string, refreshToken: string | undefined, user: { name: string, email: string }) => void;
 }
 
 export const LoginScreen: React.FC<LoginProps> = ({ onLoginSuccess }) => {
@@ -13,6 +13,9 @@ export const LoginScreen: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const handleLogin = useGoogleLogin({
     flow: 'auth-code',
     scope: 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/contacts.readonly',
+    prompt: 'consent',
+    // @ts-ignore - access_type is supported by the underlying Google GIS but types might complain
+    access_type: 'offline',
     onSuccess: async (codeResponse) => {
       console.log('Got Auth Code:', codeResponse.code);
       
@@ -25,7 +28,7 @@ export const LoginScreen: React.FC<LoginProps> = ({ onLoginSuccess }) => {
         const data = await res.json();
         
         if (data.success) {
-          onLoginSuccess(data.access_token, data.user);
+          onLoginSuccess(data.access_token, data.refresh_token, data.user);
           navigate('/');
         } else {
           console.error("Backend auth failed:", data.error);

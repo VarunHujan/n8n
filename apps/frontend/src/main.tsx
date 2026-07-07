@@ -28,8 +28,11 @@ createRoot(document.getElementById('root')!).render(
         <Routes>
           <Route path="/login" element={
             <LoginScreen 
-              onLoginSuccess={(token, user) => {
+              onLoginSuccess={(token, refreshToken, user) => {
                 localStorage.setItem('auth_token', token);
+                if (refreshToken) {
+                  localStorage.setItem('refresh_token', refreshToken);
+                }
                 localStorage.setItem('user_profile', JSON.stringify(user));
               }} 
             />
